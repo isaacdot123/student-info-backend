@@ -2,13 +2,15 @@
   "name": "student-information-system",
   "version": "1.0.0",
   "description": "A student information system built with Node.js and Express",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2",
+    "openai": "^4.77.0"
   },
   "engines": {
     "node": ">=14"
