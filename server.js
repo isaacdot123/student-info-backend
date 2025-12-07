@@ -1,154 +1,82 @@
 // server.js
-require("dotenv").config();
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
 const cors = require("cors");
-const { OpenAI } = require("openai");
+const fetch = require("node-fetch"); // ensure installed: npm install node-fetch
 
 const app = express();
-const PORT = process.env.PORT || 4000;
-
 app.use(cors());
 app.use(express.json());
-app.get("/", (req, res) => {
-  res.send("Student Information System Backend is running.");
-});
 
+// --- Student CRUD Routes ---
+// Example: replace with your actual student DB logic
+let students = [];
 
-// Path to student dataset
-const dataPath = path.join(__dirname, "students.json");
-
-// Helper: read data from JSON file
-function readData() {
-  try {
-    const jsonData = fs.readFileSync(dataPath);
-    return JSON.parse(jsonData);
-  } catch (error) {
-    return [];
-  }
-}
-
-// Helper: write data to JSON file
-function writeData(data) {
-  fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
-}
-
-// -------------------- CRUD ROUTES --------------------
-
-// GET /students - get all students
+// Get all students
 app.get("/students", (req, res) => {
-  const students = readData();
   res.json(students);
 });
 
-// POST /students - add new student
+// Add student
 app.post("/students", (req, res) => {
-  const newStudent = req.body;
-
-  // Basic validation
-  if (
-    !newStudent.studentID ||
-    !newStudent.fullName ||
-    !newStudent.gender ||
-    !newStudent.gmail ||
-    !newStudent.program ||
-    !newStudent.yearLevel ||
-    !newStudent.university
-  ) {
-    return res.status(400).json({ error: "All fields are required." });
+  const student = req.body;
+  if (!student.studentID || !student.fullName) {
+    return res.status(400).json({ error: "Missing required fields." });
   }
-
-  // Simple email format check
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(newStudent.gmail)) {
-    return res.status(400).json({ error: "Invalid email format." });
-  }
-
-  const students = readData();
-
-  // Check for duplicate studentID
-  if (students.some((s) => s.studentID === newStudent.studentID)) {
-    return res.status(400).json({ error: "Student ID must be unique." });
-  }
-
-  students.push(newStudent);
-  writeData(students);
-  res.status(201).json({ message: "Student added successfully." });
+  students.push(student);
+  res.json(student);
 });
 
-// DELETE /students/:id - delete student by studentID
+// Delete student
 app.delete("/students/:id", (req, res) => {
   const id = req.params.id;
-  let students = readData();
-
-  const initialLength = students.length;
-  students = students.filter((student) => student.studentID !== id);
-
-  if (students.length === initialLength) {
+  const index = students.findIndex(s => s.studentID === id);
+  if (index === -1) {
     return res.status(404).json({ error: "Student not found." });
   }
-
-  writeData(students);
-  res.json({ message: "Student deleted successfully." });
+  students.splice(index, 1);
+  res.json({ success: true });
 });
 
-// -------------------- LLM CHAT ROUTE --------------------
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
+// --- AI Chat Route using OpenRouter ---
 app.post("/chat", async (req, res) => {
   const { message } = req.body;
 
-  if (!message || typeof message !== "string") {
-    return res.status(400).json({ error: "Invalid question." });
-  }
-
-  const students = readData();
-  if (!Array.isArray(students) || students.length === 0) {
-    return res.json({
-      messages: [
-        { role: "user", content: message },
-        { role: "assistant", content: "The student dataset is empty. No records to analyze." },
-      ],
-    });
+  if (!message) {
+    return res.status(400).json({ error: "Message is required." });
   }
 
   try {
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: `You are a data analysis assistant. Answer strictly based on the provided student JSON data.`,
-        },
-        {
-          role: "user",
-          content: `Here is the student dataset:\n${JSON.stringify(students, null, 2)}\n\nQuestion: ${message}`,
-        },
-      ],
-      temperature: 0.2,
-      max_tokens: 600,
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`, // use env var
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5500", // change to your frontend URL if deployed
+        "X-Title": "Student Info Chat"
+      },
+      body: JSON.stringify({
+        model: "mistralai/mistral-7b-instruct", // free model
+        messages: [
+          { role: "user", content: message }
+        ]
+      })
     });
 
-    const answer = response.choices[0].message.content;
+    const data = await response.json();
 
-    res.json({
-      messages: [
-        { role: "user", content: message },
-        { role: "assistant", content: answer || "No answer generated." },
-      ],
-    });
-  } catch (err) {
-    console.error("LLM error:", err);
-    res.status(502).json({ error: "LLM API failed. Please try again later." });
+    if (!response.ok) {
+      return res.status(500).json({ error: data.error || "Failed to get response from AI." });
+    }
+
+    res.json(data);
+  } catch (error) {
+    console.error("Chat error:", error);
+    res.status(500).json({ error: "Server error while communicating with AI." });
   }
 });
 
-// -------------------- START SERVER --------------------
-
+// --- Start Server ---
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Backend running on port ${PORT}`);
 });
