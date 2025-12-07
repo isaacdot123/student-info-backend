@@ -1,46 +1,34 @@
-// aiService.js
-const OpenAI = require("openai");
+// aiservice.js
+// Handles communication with backend AI chat route
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const CHAT_URL = "https://student-info-backend2-0.onrender.com/chat"; 
+// ^ Replace with your actual Render backend URL
 
 /**
- * Send the user's question and the full student dataset to the LLM.
- * The prompt instructs the LLM to strictly use provided JSON data.
+ * Send a message to the backend AI service
+ * @param {string} message - The user’s question or prompt
+ * @returns {Promise<string>} - The AI’s reply
  */
-async function chatWithLLM(userMessage, studentsJson) {
-  const systemPrompt = `
-You are a data analysis assistant. You must answer strictly based on the provided student JSON data.
-Rules:
-- If a requested field is not present in the data, say it's not available.
-- For counts, compute exactly from the dataset.
-- For lists, return only the exact matching records from the dataset.
-- If the dataset is empty, say so.
-- If asked for "average age" but age isn't in the data, state that age is not available.
-- Consider synonyms: BS Information Systems = BSIS, BS Computer Science = BCS, etc., only if exactly present in data.
-- Output concise, accurate answers. If the question is unclear, ask a brief clarifying question.
-`;
+export async function askAI(message) {
+  try {
+    const response = await fetch(CHAT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ message }),
+    });
 
-  const userPrompt = `
-Here is the full student dataset (JSON):
-${JSON.stringify(studentsJson, null, 2)}
+    const data = await response.json();
 
-User question:
-${userMessage}
-`;
+    if (!response.ok) {
+      throw new Error(data.error || "Error communicating with AI");
+    }
 
-  const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: systemPrompt.trim() },
-      { role: "user", content: userPrompt.trim() },
-    ],
-    temperature: 0.2,
-    max_tokens: 600,
-  });
-
-  return response.choices?.[0]?.message?.content || "";
+    // Our backend returns { success, message, raw }
+    return data.message || "No response from AI.";
+  } catch (error) {
+    console.error("AI Service Error:", error);
+    return "Error communicating with AI service.";
+  }
 }
-
-module.exports = { chatWithLLM };

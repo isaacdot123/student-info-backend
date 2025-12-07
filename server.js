@@ -1,31 +1,50 @@
 // server.js
 // Backend for Student Information System + AI Chat (OpenRouter + Mistral 7B Instruct)
+// Now with JSON file persistence for students
 
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch"); // npm i node-fetch@2 (if using Node 16/Render default)
+const fs = require("fs");
+const fetch = require("node-fetch"); // npm i node-fetch@2
 
 const app = express();
-
-// ----- Config -----
 app.use(express.json());
 app.use(
   cors({
     origin: [
-      "http://localhost:5500",       // VS Code Live Server
-      "http://localhost:3000",       // Local backend tests
-      "https://your-frontend-url.com", // Replace with your deployed frontend URL
+      "http://localhost:5500",
+      "http://localhost:3000",
+      "https://your-frontend-url.com", // replace with your deployed frontend
     ],
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
-    credentials: false,
   })
 );
 
-// ----- In-memory student store (replace with DB in production) -----
-let students = [
-  // Example format:
-  // { studentID: "2025-001", fullName: "Jane Doe", program: "BSIT", yearLevel: "3", gender: "Female" }
-];
+// ----- Load students.json at startup -----
+const STUDENTS_FILE = "students.json";
+let students = [];
+
+function loadStudents() {
+  try {
+    const data = fs.readFileSync(STUDENTS_FILE, "utf8");
+    students = JSON.parse(data);
+    console.log(`Loaded ${students.length} students from ${STUDENTS_FILE}`);
+  } catch (err) {
+    console.warn("No students.json found, starting with empty list.");
+    students = [];
+  }
+}
+
+function saveStudents() {
+  try {
+    fs.writeFileSync(STUDENTS_FILE, JSON.stringify(students, null, 2));
+    console.log("Saved students.json");
+  } catch (err) {
+    console.error("Error saving students.json:", err);
+  }
+}
+
+loadStudents();
 
 // ----- Health check -----
 app.get("/", (_req, res) => {
@@ -33,15 +52,12 @@ app.get("/", (_req, res) => {
 });
 
 // ----- Student CRUD -----
-
-// Get all students
 app.get("/students", (_req, res) => {
   res.json(students);
 });
 
-// Add student
 app.post("/students", (req, res) => {
-  const { studentID, fullName, program, yearLevel, gender } = req.body;
+  const { studentID, fullName, program, yearLevel, gender, gmail, university } = req.body;
 
   if (!studentID || !fullName) {
     return res.status(400).json({ error: "studentID and fullName are required." });
@@ -50,12 +66,12 @@ app.post("/students", (req, res) => {
     return res.status(409).json({ error: "Student with this ID already exists." });
   }
 
-  const student = { studentID, fullName, program, yearLevel, gender };
+  const student = { studentID, fullName, program, yearLevel, gender, gmail, university };
   students.push(student);
+  saveStudents();
   res.status(201).json(student);
 });
 
-// Delete student by ID
 app.delete("/students/:id", (req, res) => {
   const id = req.params.id;
   const index = students.findIndex((s) => s.studentID === id);
@@ -63,27 +79,22 @@ app.delete("/students/:id", (req, res) => {
     return res.status(404).json({ error: "Student not found." });
   }
   const removed = students.splice(index, 1)[0];
+  saveStudents();
   res.json({ success: true, removed });
 });
 
 // ----- AI Chat via OpenRouter -----
-
 app.post("/chat", async (req, res) => {
-  const { message, context } = req.body;
-
+  const { message } = req.body;
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "Message is required and must be a string." });
   }
 
-  // Build a helpful system prompt using current student data for better answers
-  const studentSummary = JSON.stringify(students.slice(0, 500)); // cap to avoid long payloads
+  const studentSummary = JSON.stringify(students.slice(0, 200));
   const systemPrompt = `
-You are an assistant for a Student Information System. Answer questions using the provided student data when relevant.
+You are an assistant for a Student Information System. Use the provided student data when relevant.
 Data (JSON array, may be partial):
 ${studentSummary}
-
-If asked for counts, programs, year levels, or summaries, compute directly from the data above. If data is missing, say so clearly.
-Be concise and accurate. If the user asks for a list, return short, readable bulleted items.
 `;
 
   try {
@@ -97,7 +108,6 @@ Be concise and accurate. If the user asks for a list, return short, readable bul
       headers: {
         Authorization: `Bearer ${orKey}`,
         "Content-Type": "application/json",
-        // Referer helps OpenRouter validate requests and leaderboard attribution
         "HTTP-Referer": process.env.FRONTEND_URL || "http://localhost:5500",
         "X-Title": "Student Info Chat",
       },
@@ -105,7 +115,6 @@ Be concise and accurate. If the user asks for a list, return short, readable bul
         model: "mistralai/mistral-7b-instruct",
         messages: [
           { role: "system", content: systemPrompt.trim() },
-          ...(context && Array.isArray(context) ? context : []), // optional prior messages
           { role: "user", content: message },
         ],
         temperature: 0.2,
@@ -113,33 +122,20 @@ Be concise and accurate. If the user asks for a list, return short, readable bul
     });
 
     const data = await response.json();
-
     if (!response.ok) {
-      // Normalize OpenRouter error messages
-      const errMsg =
-        (data && data.error && (data.error.message || data.error)) ||
-        "Failed to get response from AI.";
+      const errMsg = data?.error?.message || data?.error || "Failed to get response from AI.";
       return res.status(response.status || 500).json({ error: errMsg });
     }
 
-    // Return only relevant parts for frontend
-    const content =
-      data?.choices?.[0]?.message?.content ||
-      "No content returned. Try rephrasing your question.";
-
-    res.json({
-      success: true,
-      model: "mistralai/mistral-7b-instruct",
-      message: content,
-      raw: data, // keep raw for debugging; remove in production if you prefer
-    });
+    const content = data?.choices?.[0]?.message?.content || "No content returned.";
+    res.json({ success: true, message: content });
   } catch (error) {
     console.error("Chat error:", error);
     res.status(500).json({ error: "Server error while communicating with AI." });
   }
 });
 
-// ----- 404 handler for unmatched routes -----
+// ----- 404 handler -----
 app.use((_req, res) => {
   res.status(404).json({ error: "Not Found" });
 });
